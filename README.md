@@ -1,4 +1,4 @@
-# Claude Routing
+# Claude/Codex Routing
 
 Portable backup of the two-model Claude Code setup on this machine:
 **Claude Opus 5 plans, Codex (gpt-5.6-terra, high reasoning effort) executes** —

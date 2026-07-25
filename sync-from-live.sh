@@ -18,6 +18,7 @@ assets=(
   bin/codex-handoff.sh
   bin/codex-route-hook.sh
   bin/longtask-init.sh
+  bin/longtask-no-resume-hook.sh
   agents/longtask-worker.md
   skills/codex-exec/SKILL.md
   skills/longtask/SKILL.md

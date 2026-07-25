@@ -13,6 +13,15 @@
             "command": "input=$(cat); cmd=$(echo \"$input\" | jq -r '.tool_input.command // \"\"'); if echo \"$cmd\" | grep -qE '(^|[[:space:];&|`(])sudo[[:space:]]'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"sudo required\",\"additionalContext\":\"This command requires sudo and cannot run automatically. You MUST: (1) show the user the exact full command to run, (2) explicitly ask them to run it in their terminal, (3) wait for their confirmation that they ran it before proceeding.\"}}'; fi"
           }
         ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/bin/longtask-no-resume-hook.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -14,6 +14,7 @@ live config is what's under `$HOME/.claude`.
 | `claude/bin/codex-handoff.sh` | Hands an approved plan to Codex. Pins `gpt-5.6-terra` + `model_reasoning_effort=high`, logs to `~/.claude/codex-handoff/<stamp>.{log,summary.md}` |
 | `claude/bin/codex-route-hook.sh` | `PostToolUse: ExitPlanMode` hook — on plan approval, routes execution to Codex instead of letting Claude implement |
 | `claude/bin/longtask-init.sh` | Scaffolds `.longtask/<slug>/` state with a schema a cold worker can parse |
+| `claude/bin/longtask-no-resume-hook.sh` | `PreToolUse: SendMessage` guard — prevents a retired long-task worker from being resumed with its old context |
 | `claude/agents/longtask-worker.md` | One long-task segment. `maxTurns: 40`, `model: opus`, `effort: high` |
 | `claude/skills/codex-exec/SKILL.md` | The handoff skill Claude follows after plan approval |
 | `claude/skills/longtask/SKILL.md` | `/longtask` orchestrator loop |
@@ -27,12 +28,25 @@ Claude Code (v2.1.220) has no turn-based auto-clear: `autoCompactEnabled` /
 summary), and no hook output field can reset context. But agent frontmatter supports
 `maxTurns`.
 
-So the reset is built from that. Each segment is a fresh `longtask-worker` subagent —
-a cold start with zero conversation *is* the `/clear`. It reads state from
-`.longtask/<slug>/PROGRESS.md`, plans one chunk as Opus 5, hands every source edit to
-Codex, verifies, checkpoints back to disk, and dies at the cap. The orchestrator
-spawns the next one and keeps only a ≤3-line report, so main-session context grows by
-a few hundred tokens per segment rather than tens of thousands.
+So the reset is built from two separate operations. `maxTurns` stops the current
+worker invocation, but does not erase its saved context; resuming that worker would
+retain its complete transcript. The orchestrator therefore permanently retires every
+returned worker ID and creates a brand-new `longtask-worker` with the `Agent` tool for
+the next segment. That cold start with zero conversation is the `/clear` equivalent.
+
+Each new worker reads state from `.longtask/<slug>/PROGRESS.md`, plans one chunk as
+Opus 5, hands every source edit to Codex, verifies, and checkpoints back to disk. A
+capped worker may return without a clean final report, so the orchestrator treats
+missing or malformed output as a cap, never uses `SendMessage`, and lets a fresh
+worker recover from disk. The parent Claude Code session itself is not cleared; it
+keeps only a ≤3-line report per segment, so its context grows by a few hundred tokens
+per segment rather than tens of thousands.
+
+A `PreToolUse: SendMessage` hook enforces the retirement rule: if Claude tries to
+message an agent whose session metadata identifies it as `longtask-worker`, the hook
+denies the call and directs the orchestrator to create a new worker. The hook is a
+local metadata check only. It never launches Claude Code; `codex-handoff.sh` remains
+the only script here that invokes a model programmatically.
 
 `PROGRESS.md` is the memory that survives each reset. Its `Landmines` section is the
 part that actually saves time — it stops each cold worker re-learning what the last

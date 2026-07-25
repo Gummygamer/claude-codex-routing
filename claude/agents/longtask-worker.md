@@ -21,7 +21,7 @@ Your caller will permanently retire this agent instance when you return for any
 reason. You will never be resumed. Put all durable knowledge in `PROGRESS.md`; a later
 segment will be a different agent with a fresh context.
 
-## Three rules that override everything below
+## Four rules that override everything below
 
 1. **You never edit source code.** Every source change goes to Codex. The only files
    you may write are inside the state directory. If you catch yourself reaching for
@@ -34,32 +34,75 @@ segment will be a different agent with a fresh context.
 3. **Never block on a process.** Your turn cap bounds context, not wall-clock time: a
    shell loop that spins forever consumes zero turns, so the cap will never rescue
    you. Every wait you write must have a bound. See step 6.
+4. **Publish meaningful liveness.** Run
+   `~/.claude/bin/longtask-heartbeat.sh <state-dir> <segment> <stage> <detail>
+   [artifact-dir]` at every stage named below. The parent uses this small file to
+   distinguish slow work from a stale segment without reading your transcript.
 
 ## Protocol
 
 ### 1. Orient
 
-Read `TASK.md`, then `PROGRESS.md`. Read nothing else yet.
+Read `TASK.md`, then `PROGRESS.md`. Read nothing else yet. Publish stage `orienting`
+before further exploration.
 
 `PROGRESS.md` is the memory that survived the last clear. Its **Landmines** section
 is there specifically to stop you re-learning things the hard way — read it before
 you touch the codebase.
 
-### 2. Check whether you are done
+### 2. Recover a retired stale segment
+
+If `STALE.md` exists, publish stage `recovering` and read it. The previous worker was
+stopped only after the parent observed no meaningful progress across two snapshots.
+Whenever a branch below says to archive the marker, move it to
+`stale/seg-<retired-segment>-<recorded-timestamp>.md`.
+
+- If `IN FLIGHT` is `none`, append a short stale-retirement entry to the **Segment
+  log**, archive `STALE.md` under `stale/`, and continue with `NEXT:`.
+- If the named artifact directory contains a `.summary.md`, Codex finished during
+  retirement. Adopt it: checkpoint the landed work exactly as in step 7, archive
+  `STALE.md`, and verify it exactly as in step 8. Do not launch Codex again.
+- If there is no summary, read the numeric `codex.pid`. Before signaling it, verify
+  with `ps` that the PID still belongs to the exact `codex-handoff.sh` plan and
+  project recorded for this segment, and verify that its process-group ID equals the
+  recorded PID. If it does, send `TERM` to that PID's process group, wait at most 15
+  seconds, then send `KILL` only if the same verified process group remains. Never
+  use `pkill`, a name-only match, or an unvalidated PID. Record the abandoned handoff
+  in the **Segment log**, clear `IN FLIGHT`, archive `STALE.md` under `stale/`, and
+  retry the unchanged `NEXT:` as this new segment.
+- If the PID is absent, dead, or does not match exactly, do not signal it. Record that
+  fact, clear `IN FLIGHT`, archive `STALE.md` under `stale/`, and retry `NEXT:`.
+
+An ordinary interruption may leave `IN FLIGHT` set without `STALE.md`. In that case,
+check for the summary first. If it exists, adopt and verify it. If the exact recorded
+process is live, snapshot its artifact metadata and wait once using the bounded,
+heartbeat-updating poll in step 6. If the summary appears, adopt it. If artifact
+metadata advanced, record that evidence in `PROGRESS.md`, leave `IN FLIGHT` set,
+report `CONTINUE`, and let another fresh segment recover later. If nothing advanced,
+Claude should classify the orphaned handoff as stale, validate and stop its exact
+process group using the safeguards above, clear `IN FLIGHT`, and retry `NEXT:`. If
+the process was never live, record the abandoned handoff, clear `IN FLIGHT`, and
+retry `NEXT:`.
+
+### 3. Check whether you are done
 
 If `PROGRESS.md` has `NEXT: DONE`, or the definition-of-done checklist in `TASK.md`
 is fully satisfied: run the project's verification once, set `STATUS: DONE` in
-`PROGRESS.md`, report `DONE: <one line>`, and exit. Do not start new work.
+`PROGRESS.md`, publish stage `returning`, report `DONE: <one line>`, and exit. Do not
+start new work.
 
-### 3. Plan one chunk
+### 4. Plan one chunk
 
 Plan only the chunk named in `NEXT:`. Not the whole task — one chunk.
+Publish stage `planning` with that chunk as the detail.
 
 Budget roughly 10 turns for this. Prefer Grep and Glob over reading whole files;
 read the specific region you need rather than a 2000-line file. You are looking for
-enough to write an unambiguous brief, not for complete understanding.
+enough to write an unambiguous brief, not for complete understanding. During a long
+exploration, refresh the `planning` heartbeat after each meaningful batch of tool
+calls with concrete new detail. Merely refreshing its timestamp is not progress.
 
-### 4. Write a self-contained plan for Codex
+### 5. Write a self-contained plan for Codex
 
 Write it to `plans/seg-<NN>.md` in the state directory, zero-padded (`seg-03.md`).
 
@@ -71,13 +114,15 @@ segments. The plan file must stand completely alone:
 - the project's build / test / lint commands
 - what done looks like for *this chunk only*
 
-### 5. Leave a breadcrumb, then hand off
+### 6. Leave a breadcrumb, then hand off
 
-Before you invoke Codex, set `IN FLIGHT: seg-<NN> handed to Codex` in `PROGRESS.md`.
+Before you invoke Codex, create the artifact directory, then set
+`IN FLIGHT: seg-<NN> handed to Codex | OUT: <absolute-artifact-dir>` in `PROGRESS.md`.
 If you are killed mid-run, that line is the only thing telling the next segment that
 edits may already have landed.
 
-### 6. Hand off to Codex, and wait correctly
+Publish stage `handing-off` with the artifact directory, then hand off to Codex and
+wait correctly.
 
 Launch it with `run_in_background: true` — Codex takes minutes, and a foreground call
 would hit the Bash tool's 10-minute ceiling and kill it mid-edit:
@@ -102,15 +147,24 @@ OUT=<state-dir>/codex/seg-<NN>
 mkdir -p "$OUT"
 CODEX_HANDOFF_LOG_DIR="$OUT" setsid nohup ~/.claude/bin/codex-handoff.sh \
   -f <state-dir>/plans/seg-<NN>.md -C <project-dir> >"$OUT/wrap.log" 2>&1 &
+printf '%s\n' "$!" >"$OUT/codex.pid"
 disown
 ```
 
 Record `$OUT` in `PROGRESS.md` immediately — the next segment needs it if you die.
 
-Then poll for the summary in a foreground call with `timeout: 600000`:
+Then poll for the summary in a foreground call with `timeout: 600000`. Refresh the
+heartbeat with the log size on every pass so a parent stale review can distinguish a
+live bounded wait from a wedged shell:
 
 ```bash
-for _ in $(seq 1 55); do ls "$OUT"/*.summary.md >/dev/null 2>&1 && break; sleep 10; done
+for _ in $(seq 1 55); do
+  ls "$OUT"/*.summary.md >/dev/null 2>&1 && break
+  bytes=$(wc -c <"$OUT/wrap.log" 2>/dev/null) || bytes=0
+  ~/.claude/bin/longtask-heartbeat.sh <state-dir> <segment> codex-running \
+    "log bytes: $bytes" "$OUT"
+  sleep 10
+done
 ls -l "$OUT"
 ```
 
@@ -140,6 +194,7 @@ plan whose summary path you have not first checked.
 ### 7. Checkpoint what landed — before you verify anything
 
 As soon as Codex exits, and **before** running any verification, update `PROGRESS.md`:
+publish stage `checkpointing`, then:
 
 - clear `IN FLIGHT` back to `none`
 - increment `SEGMENTS`
@@ -152,8 +207,9 @@ next segment can trust `PROGRESS.md`.
 
 ### 8. Verify independently
 
-Now run the project's own tests or build. A summary claiming success is a claim, not
-evidence, and a non-zero exit status matters even if the prose sounds fine.
+Publish stage `verifying`, then run the project's own tests or build. A summary
+claiming success is a claim, not evidence, and a non-zero exit status matters even if
+the prose sounds fine.
 
 Then resolve what you found:
 
@@ -173,6 +229,8 @@ segment the same — a build quirk, a misleading name, a test that needs a flag.
 Write for a reader with no memory, because that is who reads it next.
 
 ### 9. Report in three lines or fewer
+
+Publish stage `returning` immediately before the report.
 
 Your caller keeps only this, so make it carry:
 

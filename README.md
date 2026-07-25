@@ -14,6 +14,7 @@ live config is what's under `$HOME/.claude`.
 | `claude/bin/codex-handoff.sh` | Hands an approved plan to Codex. Pins `gpt-5.6-terra` + `model_reasoning_effort=high`, logs to `~/.claude/codex-handoff/<stamp>.{log,summary.md}` |
 | `claude/bin/codex-route-hook.sh` | `PostToolUse: ExitPlanMode` hook — on plan approval, routes execution to Codex instead of letting Claude implement |
 | `claude/bin/longtask-init.sh` | Scaffolds `.longtask/<slug>/` state with a schema a cold worker can parse |
+| `claude/bin/longtask-heartbeat.sh` | Atomically publishes a worker's current stage for stale-segment detection |
 | `claude/bin/longtask-no-resume-hook.sh` | `PreToolUse: SendMessage` guard — prevents a retired long-task worker from being resumed with its old context |
 | `claude/agents/longtask-worker.md` | One long-task segment. `maxTurns: 40`, `model: opus`, `effort: high` |
 | `claude/skills/codex-exec/SKILL.md` | The handoff skill Claude follows after plan approval |
@@ -51,6 +52,15 @@ the only script here that invokes a model programmatically.
 `PROGRESS.md` is the memory that survives each reset. Its `Landmines` section is the
 part that actually saves time — it stops each cold worker re-learning what the last
 one already paid for.
+
+Workers run as background tasks so the orchestrator can regain control while they
+work. After a 20-minute soft limit, the parent Claude session compares two snapshots
+of the worker's `HEARTBEAT`, durable progress, and handoff artifact metadata. Time
+alone never declares a worker stale. If Claude sees no meaningful movement across the
+observation window, it writes `STALE.md`, stops that exact worker, retires its ID, and
+starts a fresh segment. The replacement either adopts an already-finished Codex
+handoff or validates and terminates only the exact abandoned process before retrying
+the chunk.
 
 ## Prerequisites on a new machine
 

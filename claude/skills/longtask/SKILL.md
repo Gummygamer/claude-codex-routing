@@ -32,10 +32,15 @@ in conversation but never written down.
 ## Step 2 — launch a genuinely fresh worker
 
 Before the call, hash `PROGRESS.md` for the stall guard. Then spawn
-`longtask-worker` synchronously (`run_in_background: false`,
+`longtask-worker` in the background (`run_in_background: true`,
 `subagent_type: "longtask-worker"`) with a minimal prompt: the state directory path
-and the segment number. Nothing else. The task lives in `TASK.md`; restating it in the
-prompt would defeat the entire point.
+and the segment number. Nothing else. Save the returned task ID and output-file path.
+The task lives in `TASK.md`; restating it in the prompt would defeat the entire point.
+
+Use `TaskOutput` with `block: true` and a bounded timeout (or bounded reads of the
+returned output file on versions that no longer expose `TaskOutput`) to wait for the
+result. Never make the foreground Agent call itself the wait: the orchestrator needs
+control back so it can detect a worker that is alive but no longer progressing.
 
 Every segment MUST be a new `Agent` tool invocation. This is the hard context-isolation
 invariant:
@@ -51,7 +56,45 @@ invariant:
 A resumed worker retains its transcript and defeats the reset even though its turn
 counter starts running again.
 
-## Step 3 — classify the return, then relay
+## Step 3 — detect a stale segment
+
+The soft runtime limit is 20 minutes by default. Crossing it does **not** make a
+segment stale; it asks the parent Claude Code session to judge whether the worker is
+still progressing.
+
+At the soft limit, and after every additional 10 minutes, inspect only:
+
+- the background task status (running, completed, failed, or stopped)
+- the current `PROGRESS.md` hash
+- `HEARTBEAT` (`SEGMENT`, `STAGE`, `UPDATED_EPOCH`, `DETAIL`, and `ARTIFACT_DIR`)
+- file size and modification-time metadata in `ARTIFACT_DIR`, if one is named
+- whether a numeric PID in that directory still belongs to the exact recorded
+  `codex-handoff.sh` invocation
+
+Do not read the worker transcript, Codex log contents, source files, or plan files.
+Take one evidence snapshot, wait five bounded minutes, then take a second snapshot.
+Claude must classify the result as `ACTIVE` or `STALE`; elapsed time by itself is
+never sufficient. A newer `UPDATED_EPOCH` with the same stage and detail proves only
+that the heartbeat loop is alive; it is not by itself meaningful progress.
+
+Classify `ACTIVE` if durable progress, the heartbeat stage/detail, or the recorded
+handoff artifacts advanced. A legitimate bounded wait with fresh heartbeat evidence
+is also active. If the evidence is ambiguous, classify it active and check again at
+the next interval.
+
+Classify `STALE` only when the two snapshots show no meaningful progress and the
+current stage has no credible live work behind it. Before stopping anything, write
+`<state-dir>/STALE.md` atomically (temporary file in the state directory followed by
+`mv`) with exactly `SEGMENT`, `TASK_ID`, `MARKED_EPOCH`, `STAGE`, `ARTIFACT_DIR`, and
+`REASON` lines. Then call `TaskStop` for that exact background task ID. Treat that
+worker ID as permanently retired and immediately launch segment `<N+1>` as a fresh
+Agent invocation. The new worker recovers from `PROGRESS.md`, `STALE.md`, and the
+named artifact directory.
+
+Never use `SendMessage` as a liveness probe. A message changes the worker's work and
+resuming it would preserve the context this relay is designed to discard.
+
+## Step 4 — classify the return, then relay
 
 A valid report begins with exactly one of `CONTINUE:`, `DONE:`, or `BLOCKED:` and is
 at most three lines. Pass a valid report to the user as-is.
@@ -66,7 +109,7 @@ capped segment, retire its ID, and say:
 Hash `PROGRESS.md` again after every return. Then launch the next segment with a new
 `Agent` invocation unless a stop condition applies.
 
-## Step 4 — stop conditions
+## Step 5 — stop conditions
 
 Stop on `DONE`; on `BLOCKED` (surface the question and halt — do not guess on the
 user's behalf); after two consecutive segments that leave `PROGRESS.md` byte-identical
@@ -80,10 +123,11 @@ worker and cold-start the next segment from disk.
 ## The rule that makes this work
 
 The orchestrator never reads source files, plan files, Codex logs, worker transcripts,
-or background-agent output files. It reads only `TASK.md` while initializing the task,
-the small `PROGRESS.md` hashes needed for the stall guard, and the worker's final
-three-line report. It never resumes a worker. These two disciplines keep the parent
-context small and make every segment after the first a real cold start.
+or background-agent output beyond the worker's final three-line report. It reads only
+`TASK.md` while initializing the task, the small state and file metadata allowed by
+the stale guard, and the worker's final report. It never resumes a worker. These two
+disciplines keep the parent context small and make every segment after the first a
+real cold start.
 
 ## Resuming an interrupted long task
 
@@ -98,5 +142,6 @@ subagent transcript.
 ## Overrides
 
 Turn cap per segment: edit `maxTurns` in `~/.claude/agents/longtask-worker.md`
-(default 40). Segment ceiling: per invocation. `CODEX_HANDOFF_MODEL` /
+(default 40). Stale-review soft limit: 20 minutes; follow-up interval: 10 minutes.
+Segment ceiling: per invocation. `CODEX_HANDOFF_MODEL` /
 `CODEX_HANDOFF_EFFORT` still apply to the Codex side.

@@ -60,13 +60,14 @@ fi
 state_dir="$workdir/.longtask/$slug"
 task_file="$state_dir/TASK.md"
 progress_file="$state_dir/PROGRESS.md"
+heartbeat_file="$state_dir/HEARTBEAT"
 
 if [[ -e "$task_file" ]]; then
   echo "longtask-init: task already exists: $task_file; resume it instead" >&2
   exit 1
 fi
 
-mkdir -p "$state_dir/plans"
+mkdir -p "$state_dir/plans" "$state_dir/stale"
 
 cat >"$task_file" <<EOF
 # Task: $slug
@@ -109,6 +110,14 @@ IN FLIGHT: none
 <!-- Things a cold worker would otherwise rediscover the hard way. -->
 EOF
 
+cat >"$heartbeat_file" <<EOF
+SEGMENT: none
+STAGE: initialized
+UPDATED_EPOCH: $(date +%s)
+DETAIL: awaiting first segment
+ARTIFACT_DIR: none
+EOF
+
 if git -C "$workdir" rev-parse --git-dir >/dev/null 2>&1; then
   gitignore="$workdir/.gitignore"
   if [[ ! -f "$gitignore" ]] || ! grep -Fqx '.longtask/' "$gitignore"; then
@@ -116,4 +125,4 @@ if git -C "$workdir" rev-parse --git-dir >/dev/null 2>&1; then
   fi
 fi
 
-printf '%s\n' "$state_dir" "$task_file" "$progress_file"
+printf '%s\n' "$state_dir" "$task_file" "$progress_file" "$heartbeat_file"

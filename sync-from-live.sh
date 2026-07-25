@@ -17,6 +17,7 @@ dest="$repo/claude"
 assets=(
   bin/codex-handoff.sh
   bin/codex-route-hook.sh
+  bin/longtask-heartbeat.sh
   bin/longtask-init.sh
   bin/longtask-no-resume-hook.sh
   agents/longtask-worker.md

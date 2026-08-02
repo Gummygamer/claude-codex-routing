@@ -2,7 +2,9 @@
 
 Portable backup of the two-model Claude Code setup on this machine:
 **Claude Opus 5 plans, Codex (gpt-5.6-terra, high reasoning effort) executes** —
-plus the turn-capped long-task relay that lets a long task survive a context reset.
+with a one-shot failure recovery route through Fable 5 + GPT-5.6-Sol (high), falling
+back to Opus 5 + Sol when Fable credits are unavailable — plus the turn-capped
+long-task relay that lets a long task survive a context reset.
 
 Everything here is a snapshot of `~/.claude`. Nothing in this folder is live; the
 live config is what's under `$HOME/.claude`.
@@ -17,7 +19,10 @@ live config is what's under `$HOME/.claude`.
 | `claude/bin/longtask-heartbeat.sh` | Atomically publishes a worker's current stage for stale-segment detection |
 | `claude/bin/longtask-no-resume-hook.sh` | `PreToolUse: SendMessage` guard — prevents a retired long-task worker from being resumed with its old context |
 | `claude/agents/longtask-worker.md` | One long-task segment. `maxTurns: 40`, `model: opus`, `effort: high` |
+| `claude/agents/longtask-recovery-worker.md` | One tentative failed-chunk recovery. Fable 5 plans; GPT-5.6-Sol executes |
+| `claude/agents/routing-recovery-worker*.md` | Fable recovery worker and its no-Fable-credit Opus fallback |
 | `claude/skills/codex-exec/SKILL.md` | The handoff skill Claude follows after plan approval |
+| `claude/skills/routing-recovery/SKILL.md` | Failure evidence and one-shot Fable/Sol recovery contract |
 | `claude/skills/longtask/SKILL.md` | `/longtask` orchestrator loop |
 | `claude/settings.hooks.json` | Just the `hooks` object — merged into a new machine's settings |
 | `claude/settings.reference.json` | Full `settings.json` for eyeballing. **Not** applied automatically |
@@ -53,6 +58,14 @@ the only script here that invokes a model programmatically.
 part that actually saves time — it stops each cold worker re-learning what the last
 one already paid for.
 
+When an executor exits non-zero, admits skipping required work, or independent
+verification proves the chunk wrong, the worker records `ROUTING:
+tentative-recovery`. The next fresh planner is Fable 5 and its executor is
+GPT-5.6-Sol at high reasoning effort. Green verification resets the route to normal.
+If Fable explicitly reports exhausted credits or unavailability, a fresh Opus 5
+worker handles that same recovery while Sol remains the executor. Other errors never
+masquerade as a credit failure, and recovery does not recurse.
+
 Workers run as background tasks so the orchestrator can regain control while they
 work. After a 20-minute soft limit, the parent Claude session compares two snapshots
 of the worker's `HEARTBEAT`, durable progress, and handoff artifact metadata. Time
@@ -66,8 +79,10 @@ the chunk.
 
 - Claude Code — the `maxTurns` agent-frontmatter field is required. Verified present
   in v2.1.220.
-- `codex` CLI on `PATH` with access to `gpt-5.6-terra` (built against codex-cli
-  0.144.0).
+- `codex` CLI on `PATH` with access to `gpt-5.6-terra` and, for recovery,
+  `gpt-5.6-sol` (built against codex-cli 0.144.0).
+- Claude Code access to Fable 5 is optional; an explicit credit or availability
+  failure keeps Opus 5 as the recovery planner.
 - `jq` — used by the sudo-guard hook and by `install-to-machine.sh`.
 
 ## Restore onto a new machine

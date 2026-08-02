@@ -99,6 +99,7 @@ cat >"$progress_file" <<EOF
 NEXT: <the single next chunk, one line>
 SEGMENTS: 0
 IN FLIGHT: none
+ROUTING: normal
 
 ## Done
 

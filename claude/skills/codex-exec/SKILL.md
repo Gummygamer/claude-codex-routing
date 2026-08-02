@@ -41,6 +41,12 @@ Codex did — not to implement the plan yourself.
    summary admitting skipped steps is something the user needs to hear plainly,
    not smoothed over.
 
+   If that evidence shows the implementation is failing, invoke the
+   `routing-recovery` skill for one tentative recovery cycle. Fable 5 replans and
+   GPT-5.6-Sol executes at high effort. If Fable explicitly has no credits or is
+   unavailable, use the skill's fresh Opus 5 fallback while keeping Sol as executor.
+   Do not trigger recovery merely because a multi-step task is not finished yet.
+
 4. **Handle follow-ups.** If the user wants changes to what Codex built, that is
    new planning work: plan the fix, then hand off again. Small corrections you
    can make directly are fine — don't round-trip a one-line typo fix.

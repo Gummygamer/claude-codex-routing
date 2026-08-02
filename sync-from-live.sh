@@ -21,8 +21,12 @@ assets=(
   bin/longtask-init.sh
   bin/longtask-no-resume-hook.sh
   agents/longtask-worker.md
+  agents/longtask-recovery-worker.md
+  agents/routing-recovery-worker.md
+  agents/routing-recovery-worker-opus.md
   skills/codex-exec/SKILL.md
   skills/longtask/SKILL.md
+  skills/routing-recovery/SKILL.md
 )
 
 [[ -d "$live" ]] || { echo "sync: no live config at $live" >&2; exit 1; }

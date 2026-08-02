@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Hand an approved implementation plan to Codex for execution.
 #
-# Claude Code (Opus 5) plans; this script hands the plan to Codex running
-# GPT-5.6-Terra at high reasoning effort, which does the actual editing.
+# Claude Code normally plans with Opus 5 and this script normally hands the plan
+# to GPT-5.6-Terra. Recovery callers override the model with GPT-5.6-Sol. Both
+# routes use high reasoning effort.
 #
 # Usage:
 #   codex-handoff.sh -f PLAN_FILE [-C WORKDIR] [-- extra codex args...]
@@ -50,8 +51,8 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 log="$LOG_DIR/$stamp.log"
 summary="$LOG_DIR/$stamp.summary.md"
 
-prompt="You are the execution stage of a two-model workflow. Claude Opus 5 produced the
-plan below and it has already been approved by the user. Your job is to implement it.
+prompt="You are the execution stage of a two-model workflow. The planning model produced
+the plan below and it has already been approved by the user. Your job is to implement it.
 
 Rules:
 - Implement the plan as written. Do not re-plan, re-scope, or ask for approval.

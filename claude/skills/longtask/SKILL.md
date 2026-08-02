@@ -7,11 +7,12 @@ description: Run a long task, work where the user says "this will take a while" 
 
 ## What it does
 
-Run a long task as a series of segments. Each segment is a fresh `longtask-worker`
-subagent that cold-starts from disk. `maxTurns` only stops one worker invocation; it
-does **not** erase that worker's saved context. The `/clear` equivalent comes from
-retiring that worker permanently and creating a new `Agent` instance for the next
-segment. Opus 5 plans in each worker; Codex makes every source edit.
+Run a long task as a series of segments. Each segment is a fresh worker subagent that
+cold-starts from disk. `maxTurns` only stops one worker invocation; it does **not**
+erase that worker's saved context. The `/clear` equivalent comes from retiring that
+worker permanently and creating a new `Agent` instance for the next segment. Opus 5
+plans normally; a failed implementation gets one tentative Fable 5 recovery segment.
+Codex makes every source edit.
 
 ## Step 1 — set up state
 
@@ -31,10 +32,11 @@ in conversation but never written down.
 
 ## Step 2 — launch a genuinely fresh worker
 
-Before the call, hash `PROGRESS.md` for the stall guard. Then spawn
-`longtask-worker` in the background (`run_in_background: true`,
-`subagent_type: "longtask-worker"`) with a minimal prompt: the state directory path
-and the segment number. Nothing else. Save the returned task ID and output-file path.
+Before the call, hash `PROGRESS.md` for the stall guard. Read only the `ROUTING:` line
+in its Status section (`normal` if absent for older state). Spawn `longtask-worker`
+for `normal`, or `longtask-recovery-worker` for `tentative-recovery`, in the
+background (`run_in_background: true`) with a minimal prompt: the state directory
+path and segment number. Nothing else. Save the returned task ID and output-file path.
 The task lives in `TASK.md`; restating it in the prompt would defeat the entire point.
 
 Use `TaskOutput` with `block: true` and a bounded timeout (or bounded reads of the
@@ -55,6 +57,12 @@ invariant:
 
 A resumed worker retains its transcript and defeats the reset even though its turn
 counter starts running again.
+
+If a `longtask-recovery-worker` startup/result explicitly says Fable credits are
+exhausted, a usage limit was reached, or Fable is unavailable, retire it and spawn a
+fresh ordinary `longtask-worker` for the same segment. Its
+`ROUTING: tentative-recovery` state keeps GPT-5.6-Sol as executor while Opus 5 remains
+the planner. No other error qualifies for this fallback.
 
 ## Step 3 — detect a stale segment
 
@@ -145,3 +153,6 @@ Turn cap per segment: edit `maxTurns` in `~/.claude/agents/longtask-worker.md`
 (default 40). Stale-review soft limit: 20 minutes; follow-up interval: 10 minutes.
 Segment ceiling: per invocation. `CODEX_HANDOFF_MODEL` /
 `CODEX_HANDOFF_EFFORT` still apply to the Codex side.
+
+Normal segments use GPT-5.6-Terra. A `tentative-recovery` segment uses GPT-5.6-Sol
+at high reasoning effort and resets to normal after green verification.

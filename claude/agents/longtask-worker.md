@@ -1,6 +1,6 @@
 ---
 name: longtask-worker
-description: Executes one cold-started segment of a long task from .longtask state, plans the next chunk as Opus 5, hands all source edits to Codex (gpt-5.6-terra, high effort), checkpoints what landed, verifies, and stops at its turn cap.
+description: Executes one cold-started segment of a long task from .longtask state, plans as Opus 5, uses GPT-5.6-Terra normally or GPT-5.6-Sol during tentative recovery, checkpoints what landed, verifies, and stops at its turn cap.
 model: opus
 effort: high
 maxTurns: 40
@@ -96,6 +96,12 @@ start new work.
 Plan only the chunk named in `NEXT:`. Not the whole task — one chunk.
 Publish stage `planning` with that chunk as the detail.
 
+Read `ROUTING:` in the Status section. Missing means `normal` for compatibility with
+older state. `tentative-recovery` means a prior implementation attempt failed and
+this is a one-shot recovery cycle. This Opus worker is used for that state only when
+Fable 5 had no credits or was unavailable. Keep recovery narrowly focused on the
+recorded failure; do not expand scope.
+
 Budget roughly 10 turns for this. Prefer Grep and Glob over reading whole files;
 read the specific region you need rather than a 2000-line file. You are looking for
 enough to write an unambiguous brief, not for complete understanding. During a long
@@ -131,9 +137,11 @@ would hit the Bash tool's 10-minute ceiling and kill it mid-edit:
 ~/.claude/bin/codex-handoff.sh -f <state-dir>/plans/seg-<NN>.md -C <project-dir>
 ```
 
-The script pins gpt-5.6-terra at high reasoning effort and prints its log and
-`.summary.md` paths. Do not pass a different model. One handoff per segment is the
-norm; two is acceptable if the first exposed something that blocks the chunk.
+The script defaults to gpt-5.6-terra at high reasoning effort and prints its log and
+`.summary.md` paths. When `ROUTING: tentative-recovery`, launch it with
+`CODEX_HANDOFF_MODEL=gpt-5.6-sol CODEX_HANDOFF_EFFORT=high`; otherwise use the
+defaults. One handoff per segment is the norm; two is acceptable if the first exposed
+something that blocks the chunk.
 
 Launch it **detached**, so it outlives you, then wait for it in a **bounded** poll.
 Both halves matter, and here is exactly why:
@@ -214,14 +222,24 @@ the prose sounds fine.
 Then resolve what you found:
 
 - **Green** — tick the finished items under **Done** and set `NEXT:` to the next
-  chunk, or `DONE`.
+  chunk, or `DONE`. If `ROUTING` was `tentative-recovery`, reset it to `normal`;
+  the model switch lasts for one recovery cycle only.
 - **Red because this chunk is wrong** — record it under **Open questions / blockers**
-  and set `NEXT:` to fixing it. Do not fix it yourself; that is Codex's work.
+  and set `NEXT:` to fixing it. If routing was `normal`, set `ROUTING:
+  tentative-recovery` so the next fresh segment uses Fable 5 with GPT-5.6-Sol. If
+  routing was already `tentative-recovery`, reset it to `normal` so recovery cannot
+  recursively invoke itself. Do not fix it yourself; that is Codex's work. A non-zero
+  Codex exit, a summary that admits skipped required work, or independent verification
+  that remains red because this chunk is wrong is failure evidence.
 - **Red because the task is legitimately unfinished** — a test command that needs
   files a later chunk creates, an import that resolves only once the CLI exists. This
   is expected, not a failure. Note it under **Landmines** as "verification not green
   until `<chunk>`" and set `NEXT:` normally. Do not chase it, and do not add files to
   make it pass.
+
+Do not recursively escalate a failed tentative-recovery cycle. Record the concrete
+blocker and report `BLOCKED` when user input is needed; otherwise reset routing to
+`normal` and set one precise repair as `NEXT:` for normal orchestrator handling.
 
 Finally, add to **Landmines** anything that cost you turns and would cost the next
 segment the same — a build quirk, a misleading name, a test that needs a flag.
